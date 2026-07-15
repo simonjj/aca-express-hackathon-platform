@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const { ContainerAppsAPIClient } = require('@azure/arm-appcontainers');
-const { ClientSecretCredential } = require('@azure/identity');
+const { ClientSecretCredential, ManagedIdentityCredential } = require('@azure/identity');
 const config = require('./config');
 const { normalizeSize, resourcesFor } = require('./sizes');
 
@@ -30,20 +30,31 @@ function ensureProvisioning() {
   if (!config.provisioningEnabled) {
     throw new ApiError(
       503,
-      'Provisioning is disabled: no service principal configured. Set AZURE_PROVISION_* (see scripts/create-provisioner-sp).'
+      'Provisioning is disabled: no managed identity or service principal configured. ' +
+        'Deploy with useManagedIdentityProvisioning=true, or set AZURE_PROVISION_* (see scripts/create-provisioner-sp).'
     );
   }
+}
+
+// The control plane runs on a standard ACA env, so it can authenticate to ARM with a
+// user-assigned managed identity (default). A service principal client secret is used
+// instead when one is configured (takes precedence). The target participant apps still
+// land on the Express env — that env's lack of MI does not affect this caller identity.
+function buildCredential() {
+  if (config.provisioningMode === 'service-principal') {
+    return new ClientSecretCredential(
+      config.azure.tenantId,
+      config.azure.clientId,
+      config.azure.clientSecret
+    );
+  }
+  return new ManagedIdentityCredential({ clientId: config.azure.managedIdentityClientId || undefined });
 }
 
 function getClient() {
   ensureProvisioning();
   if (!_client) {
-    const cred = new ClientSecretCredential(
-      config.azure.tenantId,
-      config.azure.clientId,
-      config.azure.clientSecret
-    );
-    _client = new ContainerAppsAPIClient(cred, config.azure.subscriptionId);
+    _client = new ContainerAppsAPIClient(buildCredential(), config.azure.subscriptionId);
   }
   return _client;
 }
@@ -62,10 +73,6 @@ function buildResourceName(ownerId, friendly) {
   let name = `h${ownerHash(ownerId)}-${san || 'app'}`.slice(0, 32).replace(/-+$/g, '');
   if (name.length < 2) name = `h${ownerHash(ownerId)}`;
   return name;
-}
-
-function revisionSuffix() {
-  return `v${Date.now().toString(36)}`;
 }
 
 function registriesAndSecretsForImage(image) {
@@ -165,7 +172,9 @@ async function createApp(user, { name, method, image, size, targetPort, external
       secrets,
     },
     template: {
-      revisionSuffix: revisionSuffix(),
+      // NOTE: Express environments reject a custom template.revisionSuffix
+      // (ExpressEnvironmentFeatureNotSupported). ACA auto-names each revision from the
+      // template, so every deploy still produces a new revision = a snapshot.
       containers: [
         {
           name: 'main',
@@ -250,7 +259,9 @@ async function rollback(user, name, revisionName, isAdmin) {
   if (!rev.template) throw new ApiError(400, 'Selected revision has no template to restore.');
 
   const restored = JSON.parse(JSON.stringify(rev.template));
-  restored.revisionSuffix = revisionSuffix();
+  // Express rejects a custom revisionSuffix; drop the captured one and let ACA re-derive
+  // the revision name when it re-applies this template.
+  delete restored.revisionSuffix;
 
   const envelope = {
     location: app.location,

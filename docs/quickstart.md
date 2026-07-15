@@ -14,23 +14,27 @@
 azd env new my-hackathon
 ```
 
-## 2. Create the provisioning service principal
+## 2. Provisioning identity (managed identity by default)
 
-The platform provisions participant apps with a **service principal**. This script creates
-the SP, grants it **Contributor** on the resource group azd will use, and writes
-`AZURE_PROVISION_CLIENT_ID` / `AZURE_PROVISION_CLIENT_SECRET` into the azd env.
+By default `azd up` creates a **user-assigned managed identity**, grants it **Contributor**
+on the resource group, and attaches it to the platform app — so participant provisioning
+works out of the box with no secrets to manage. This requires your account to have rights
+to create a role assignment on the RG (Owner or User Access Administrator).
+
+**If you can't create role assignments** (or prefer a service principal), disable the
+managed identity and supply an SP instead:
 
 ```bash
+azd env set USE_MANAGED_IDENTITY_PROVISIONING false
 pwsh ./scripts/create-provisioner-sp.ps1        # Windows / pwsh
 # or
 sh   ./scripts/create-provisioner-sp.sh         # bash
 ```
 
-> **Provisioning is disabled by default.** If you skip this step, the platform still
-> deploys and you can log in and browse — the dashboard shows a "provisioning disabled"
-> banner until an SP is configured (`azd env set AZURE_PROVISION_*`, then `azd provision`).
-> In some tenants `az ad sp create-for-rbac` needs a service-tree reference; see
-> [troubleshooting](troubleshooting.md#servicemanagementreference-field-is-required-creating-the-sp).
+That script creates the SP, grants it Contributor, and writes `AZURE_PROVISION_CLIENT_ID` /
+`AZURE_PROVISION_CLIENT_SECRET` into the azd env (which take precedence over the identity).
+In some tenants `az ad sp create-for-rbac` needs a service-tree reference; see
+[troubleshooting](troubleshooting.md#servicemanagementreference-field-is-required-creating-the-sp).
 
 ## 3. Deploy
 

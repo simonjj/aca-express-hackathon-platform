@@ -9,6 +9,7 @@ set -eu
 : "${OIDC_REALM:?}"
 : "${OIDC_CLIENT_ID:?}"
 : "${OIDC_CLIENT_SECRET:?}"
+: "${OIDC_PROVIDER_NAME:?}"
 : "${PLATFORM_REDIRECT_URI:?}"
 : "${PLATFORM_URI:?}"
 
@@ -63,7 +64,7 @@ CLIENT_JSON=$(cat <<EOF
   "standardFlowEnabled": true,
   "directAccessGrantsEnabled": false,
   "serviceAccountsEnabled": false,
-  "redirectUris": ["${PLATFORM_REDIRECT_URI}", "${WEB_URI}/auth/*", "${WEB_URI}/*"],
+  "redirectUris": ["${WEB_URI}/.auth/login/${OIDC_PROVIDER_NAME}/callback", "${PLATFORM_REDIRECT_URI}", "${WEB_URI}/auth/*", "${WEB_URI}/.auth/*", "${WEB_URI}/*"],
   "webOrigins": ["${WEB_URI}"],
   "attributes": { "post.logout.redirect.uris": "${WEB_URI}/*" }
 }

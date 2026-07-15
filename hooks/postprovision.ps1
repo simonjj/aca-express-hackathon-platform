@@ -15,6 +15,7 @@ $clientId     = $env:OIDC_CLIENT_ID
 $clientSecret = $env:OIDC_CLIENT_SECRET
 $redirectUri  = $env:PLATFORM_REDIRECT_URI
 $webUri       = $env:PLATFORM_URI
+$providerName = $env:OIDC_PROVIDER_NAME
 
 $testUser = 'testuser'
 $testPass = 'Password123!'
@@ -27,7 +28,8 @@ foreach ($pair in @(
     @{ n = 'OIDC_CLIENT_ID'; v = $clientId },
     @{ n = 'OIDC_CLIENT_SECRET'; v = $clientSecret },
     @{ n = 'PLATFORM_REDIRECT_URI'; v = $redirectUri },
-    @{ n = 'PLATFORM_URI'; v = $webUri })) {
+    @{ n = 'PLATFORM_URI'; v = $webUri },
+    @{ n = 'OIDC_PROVIDER_NAME'; v = $providerName })) {
     if ([string]::IsNullOrWhiteSpace($pair.v)) {
         throw "Required environment variable '$($pair.n)' is not set. Run this via 'azd provision'/'azd up'."
     }
@@ -91,7 +93,7 @@ if ($realmExists) {
 }
 
 # --- 4. Client -------------------------------------------------------------
-$redirectUris = @($redirectUri, "$webUri/auth/*", "$webUri/*")
+$redirectUris = @("$webUri/.auth/login/$providerName/callback", $redirectUri, "$webUri/auth/*", "$webUri/.auth/*", "$webUri/*")
 $existing = Invoke-Kc -Method Get -Path "/$realm/clients?clientId=$clientId"
 $clientRep = @{
     clientId                  = $clientId
@@ -140,9 +142,14 @@ Write-Host "Keycloak configured successfully." -ForegroundColor Green
 Write-Host "  Platform      : $webUri"
 Write-Host "  Login with    : $testUser / $testPass"
 Write-Host "  Discovery     : $($env:OIDC_WELL_KNOWN_URL)"
-if ([string]::IsNullOrWhiteSpace($env:AZURE_PROVISION_CLIENT_ID)) {
+if (-not [string]::IsNullOrWhiteSpace($env:PROVISION_MANAGED_IDENTITY_CLIENT_ID)) {
+  Write-Host "  Provisioning  : ENABLED (user-assigned managed identity)" -ForegroundColor Green
+} elseif (-not [string]::IsNullOrWhiteSpace($env:AZURE_PROVISION_CLIENT_ID)) {
+  Write-Host "  Provisioning  : ENABLED (service principal)" -ForegroundColor Green
+} else {
   Write-Host ""
-  Write-Host "  NOTE: participant deployments are DISABLED (no provisioning SP set)." -ForegroundColor Yellow
-  Write-Host "        Run scripts/create-provisioner-sp.ps1 then 'azd provision' again." -ForegroundColor Yellow
+  Write-Host "  NOTE: participant deployments are DISABLED (no managed identity or SP)." -ForegroundColor Yellow
+  Write-Host "        Deploy with useManagedIdentityProvisioning=true, or run" -ForegroundColor Yellow
+  Write-Host "        scripts/create-provisioner-sp.ps1 then 'azd provision' again." -ForegroundColor Yellow
 }
 Write-Host ""

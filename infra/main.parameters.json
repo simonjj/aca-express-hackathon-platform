@@ -17,6 +17,12 @@
     "adminUsers": {
       "value": "${ADMIN_USERS=}"
     },
+    "useManagedIdentityProvisioning": {
+      "value": "${USE_MANAGED_IDENTITY_PROVISIONING=true}"
+    },
+    "contributorRoleDefinitionId": {
+      "value": "${CONTRIBUTOR_ROLE_DEFINITION_ID=b24988ac-6180-42a0-af88-d01a01e28e30}"
+    },
     "providerName": {
       "value": "${OIDC_PROVIDER_NAME=keycloak}"
     },

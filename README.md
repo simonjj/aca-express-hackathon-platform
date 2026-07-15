@@ -15,8 +15,8 @@ The control plane (the platform app + Keycloak) runs on a **standard** ACA envir
                          ┌───────────────────────────────────────────────┐
    participant browser ──►  Hackathon Platform  (standard ACA app)        │
                          │  • public HUD homepage (markdown)              │
-   AI agent + SKILL  ───►│  • Keycloak OIDC login (app-level)             │
-     (Bearer token)      │  • deployment API  ──► ARM (Service Principal) │
+   AI agent + SKILL  ───►│  • EasyAuth login (Keycloak custom OIDC)       │
+     (Bearer token)      │  • deployment API  ──► ARM (managed identity) │
                          └───────────────┬───────────────────────────────┘
                                          │ creates / updates / rolls back
                          ┌───────────────▼───────────────────────────────┐
@@ -47,8 +47,8 @@ the **target** the platform provisions participant apps into. Keycloak is tempor
 
 - **Public, themed homepage** (HUD "control panel" theme) with organizer instructions in
   **Markdown**, plus one-click staging of the agent **Skill**.
-- **Login** via Keycloak (custom OIDC) — swappable for Entra ID (see
-  [docs/keycloak-to-entraid.md](docs/keycloak-to-entraid.md)).
+- **Login** via ACA **EasyAuth** backed by Keycloak (custom OIDC) — swappable for Entra ID
+  (see [docs/keycloak-to-entraid.md](docs/keycloak-to-entraid.md)).
 - **Dashboard** listing the signed-in user's apps, status, live URLs, and a personal
   **API token** to hand to their agent.
 - **Deployment API** to create apps by `name`, `method` (`image` | `container`) and
@@ -82,39 +82,35 @@ ACA Express preview is available only in **West Central US** and **East Asia**.
 
 ```bash
 azd env new my-hackathon
-# create the provisioning service principal (needs rights to create an app + role assignment):
-pwsh ./scripts/create-provisioner-sp.ps1        # or: sh ./scripts/create-provisioner-sp.sh
 azd up                                           # pick location: westcentralus or eastasia
 ```
 
-When it finishes, open the printed **PLATFORM_URI** and sign in with `testuser` /
-`Password123!`. Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
+`azd up` creates a **user-assigned managed identity** for provisioning by default (needs
+rights to create a role assignment on the RG). When it finishes, open the printed
+**PLATFORM_URI** and sign in with `testuser` / `Password123!`. Full walkthrough:
+[docs/quickstart.md](docs/quickstart.md).
 
-## "Can the platform use Managed Identity to provision apps?" — answered
+## "Can the platform use Managed Identity to provision apps?" — answered (yes)
 
-The brief asked us to confirm whether **managed identity (MI)** is a workable, easy way
-for the platform to provision apps on users' behalf.
+The brief asked whether **managed identity (MI)** is a workable, easy way for the platform
+to provision apps on users' behalf. **Yes — and it's now the default.**
 
-**Finding: it depends on where the control plane runs.**
+- **On ACA Express: No.** Express apps **cannot carry a managed identity** (system- or
+  user-assigned) — `ExpressEnvironmentFeatureNotSupported`.
+- **On a standard ACA environment: Yes.** Since the control plane can't run on Express
+  anyway (`azd deploy` rejects it — see [Why two environments](#why-two-environments)), the
+  platform runs on a **standard** env and carries a **user-assigned managed identity** with
+  `Contributor` on the RG. `lib/aca.js` uses `ManagedIdentityCredential` to call ARM and
+  create participant apps in the Express env. The caller's identity is unrelated to the
+  target env being Express, so MI provisions Express apps fine.
 
-- **On ACA Express: No.** Express **does not support managed identity** (system- or
-  user-assigned) — `az containerapp create --user-assigned` returns
-  `ExpressEnvironmentFeatureNotSupported` — and Express apps can't pull from ACR via MI.
-- **On a standard ACA environment: Yes**, and it's easy (UAMI + `Contributor` +
-  `DefaultAzureCredential`).
-
-Because the control plane already can't run on Express (`azd deploy` rejects Express — see
-[Why two environments](#why-two-environments)), the platform runs on a **standard**
-environment, so **MI is a viable enhancement**. The template currently ships with a
-**Service Principal client secret** path (`@azure/identity` `ClientSecretCredential` for
-ARM + **ACR admin credentials** for pulls) because it works regardless of host and needs
-no tenant MI setup; swapping to `DefaultAzureCredential` + a UAMI is a one-line change,
-documented in
+A **service principal** remains as an override (`AZURE_PROVISION_*`) for tenants where you
+can't create a role assignment. Details:
 [docs/architecture.md](docs/architecture.md#managed-identity-vs-service-principal).
 
 ## Docs
 
-- [Architecture](docs/architecture.md) — components, data flow, security, MI vs SP.
+- [Architecture](docs/architecture.md) — components, data flow, EasyAuth login, MI vs SP.
 - [Quickstart](docs/quickstart.md) — deploy, log in, deploy an app, roll back.
 - [Troubleshooting](docs/troubleshooting.md) — common failures and fixes.
 - [Keycloak → Entra ID](docs/keycloak-to-entraid.md) — switch the identity provider.
@@ -127,5 +123,7 @@ npm install
 PORT=8099 node server.js       # homepage + skill work with no Azure wiring
 ```
 
-Login and provisioning are disabled locally unless you set the corresponding env vars
-(`OIDC_*`, `AZURE_PROVISION_*`); the app degrades gracefully.
+Login and provisioning are disabled locally unless you set the corresponding env vars.
+EasyAuth only exists in Azure, so for local login set the app-level OIDC fallback
+(`EASYAUTH_ENABLED=false` + `OIDC_*`); provisioning needs `AZURE_PROVISION_*` or a managed
+identity. The app degrades gracefully without them.

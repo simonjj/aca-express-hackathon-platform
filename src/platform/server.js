@@ -8,7 +8,7 @@ const cookieSession = require('cookie-session');
 const config = require('./lib/config');
 const oidc = require('./lib/oidc');
 const { renderSkill } = require('./lib/skill');
-const { requirePage, getSessionUser } = require('./lib/auth');
+const { requirePage, getCurrentUser } = require('./lib/auth');
 const { homePage, skillPage, dashboardPage, markdownToHtml, layout } = require('./views/render');
 const apiRouter = require('./routes/api');
 
@@ -44,24 +44,31 @@ function loadHomepageMarkdown() {
 }
 
 app.get('/', (req, res) => {
-  const user = getSessionUser(req);
+  const user = getCurrentUser(req);
   res.type('html').send(
     homePage({
       user,
       contentHtml: markdownToHtml(loadHomepageMarkdown()),
-      oidcEnabled: config.oidcEnabled,
+      oidcEnabled: config.loginEnabled,
     })
   );
 });
 
-// --- Auth (app-level Keycloak OIDC) ----------------------------------------
+// --- Auth ------------------------------------------------------------------
+// EasyAuth mode: the ACA sidecar owns the OIDC flow; /login and /logout just bounce to
+// the platform's /.auth endpoints. OIDC mode: the app runs the Authorization Code + PKCE
+// flow itself (lib/oidc.js). Either way the browser lands back on /dashboard.
 app.get('/login', async (req, res) => {
-  if (getSessionUser(req)) return res.redirect('/dashboard');
-  if (!config.oidcEnabled) {
+  if (getCurrentUser(req)) return res.redirect('/dashboard');
+  if (!config.loginEnabled) {
     return res
       .status(503)
       .type('html')
       .send(layout({ title: 'Login unavailable', user: null, body: authNotConfigured() }));
+  }
+  if (config.easyAuthEnabled) {
+    const provider = encodeURIComponent(config.oidc.providerName);
+    return res.redirect(`/.auth/login/${provider}?post_login_redirect_uri=%2Fdashboard`);
   }
   try {
     await oidc.beginLogin(req, res);
@@ -82,13 +89,16 @@ app.get('/auth/callback', async (req, res) => {
 });
 
 app.get('/logout', async (req, res) => {
+  req.session = null;
+  if (config.easyAuthEnabled) {
+    return res.redirect('/.auth/logout?post_logout_redirect_uri=%2F');
+  }
   let url = config.baseUrl;
   try {
     url = await oidc.endSessionUrl();
   } catch (_) {
     /* ignore */
   }
-  req.session = null;
   res.redirect(url);
 });
 
@@ -99,7 +109,7 @@ app.get('/dashboard', requirePage, (req, res) => {
 
 // --- Skill staging ---------------------------------------------------------
 app.get('/skill', (req, res) => {
-  res.type('html').send(skillPage({ user: getSessionUser(req), baseUrl: config.baseUrl }));
+  res.type('html').send(skillPage({ user: getCurrentUser(req), baseUrl: config.baseUrl }));
 });
 
 app.get('/skill/SKILL.md', (_req, res) => {
@@ -127,6 +137,6 @@ function errorPanel(err) {
 app.listen(config.port, () => {
   console.log(`Hackathon platform listening on :${config.port}`);
   console.log(`  baseUrl              = ${config.baseUrl}`);
-  console.log(`  oidcEnabled          = ${config.oidcEnabled}`);
-  console.log(`  provisioningEnabled  = ${config.provisioningEnabled}`);
+  console.log(`  loginEnabled         = ${config.loginEnabled} (easyAuth=${config.easyAuthEnabled}, oidc=${config.oidcEnabled})`);
+  console.log(`  provisioning         = ${config.provisioningEnabled} (${config.provisioningMode})`);
 });

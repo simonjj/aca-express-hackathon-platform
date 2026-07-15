@@ -1,12 +1,11 @@
-// The hackathon platform itself: a single ACA **Express** container app that serves
-// the public homepage, the authenticated dashboard, and the deployment API.
+// The hackathon platform itself: an ACA container app (on the STANDARD environment) that
+// serves the public homepage, the authenticated dashboard, and the deployment API.
 //
-// IMPORTANT (Express constraints): Express apps support NEITHER managed identity NOR
-// internal ingress. Therefore:
-//   * the app authenticates to ARM with a Service Principal client secret (to create
-//     participant apps on their behalf), and
-//   * it pulls its own image from ACR using the registry admin credentials.
-// Login is Keycloak OIDC handled at the application layer (not the EasyAuth sidecar).
+// Auth: login is handled by ACA **EasyAuth** with Keycloak as a custom OIDC provider
+// (the sidecar owns the flow; the app reads X-MS-CLIENT-PRINCIPAL headers).
+// Provisioning: the app calls ARM to create participant apps using a **user-assigned
+// managed identity** (default; possible because the control plane is NOT on Express) or a
+// service principal (override). It pulls its own image from ACR with admin credentials.
 param name string
 param location string = resourceGroup().location
 param tags object = {}
@@ -29,14 +28,19 @@ param defaultReplicaSize string = '1cpu2ram'
 @description('Comma-separated list of usernames granted the admin view (all apps).')
 param adminUsers string = ''
 
-// --- Keycloak OIDC (app-level Authorization Code flow) ---
+// --- Keycloak OIDC via ACA EasyAuth (custom OpenID Connect provider) ---
 param providerName string
 param oidcClientId string
 @secure()
 param oidcClientSecret string
 param oidcIssuer string
 
-// --- Service Principal used to provision participant apps via ARM ---
+// --- Managed identity used to provision participant apps via ARM (default) ---
+param useManagedIdentity bool = false
+param provisionIdentityId string = ''
+param provisionIdentityClientId string = ''
+
+// --- Service Principal used to provision participant apps (override) ---
 param provisionTenantId string = ''
 param provisionClientId string = ''
 @secure()
@@ -102,7 +106,9 @@ var coreEnv = [
   { name: 'ACR_PASSWORD', secretRef: 'acr-password' }
   { name: 'DEFAULT_REPLICA_SIZE', value: defaultReplicaSize }
   { name: 'ADMIN_USERS', value: adminUsers }
-  // Keycloak OIDC (app-level)
+  // Login via ACA EasyAuth (custom OIDC provider = Keycloak). The app reads the
+  // X-MS-CLIENT-PRINCIPAL headers; these values are informational / fallback.
+  { name: 'EASYAUTH_ENABLED', value: 'true' }
   { name: 'OIDC_PROVIDER_NAME', value: providerName }
   { name: 'OIDC_ISSUER', value: oidcIssuer }
   { name: 'OIDC_CLIENT_ID', value: oidcClientId }
@@ -111,18 +117,31 @@ var coreEnv = [
   { name: 'PLATFORM_API_SECRET', secretRef: 'platform-api-secret' }
   { name: 'SESSION_SECRET', secretRef: 'session-secret' }
 ]
-// Service Principal (no MI on Express) — only when configured.
+// Managed-identity provisioning (default): AZURE_CLIENT_ID selects the UAMI.
+var miEnv = useManagedIdentity ? [
+  { name: 'AZURE_USE_MANAGED_IDENTITY', value: 'true' }
+  { name: 'AZURE_CLIENT_ID', value: provisionIdentityClientId }
+] : []
+// Service Principal (override) — only when a secret is configured.
 var provisionEnv = hasProvision ? [
   { name: 'AZURE_TENANT_ID', value: provisionTenantId }
   { name: 'AZURE_PROVISION_CLIENT_ID', value: provisionClientId }
   { name: 'AZURE_PROVISION_CLIENT_SECRET', secretRef: 'provision-client-secret' }
 ] : []
-var env = concat(coreEnv, provisionEnv)
+var env = concat(coreEnv, miEnv, provisionEnv)
 
 resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
   name: name
   location: location
   tags: union(tags, { 'azd-service-name': serviceName })
+  identity: useManagedIdentity ? {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${provisionIdentityId}': {}
+    }
+  } : {
+    type: 'None'
+  }
   properties: {
     managedEnvironmentId: containerAppsEnvironment.id
     configuration: {
@@ -155,9 +174,54 @@ resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
         }
       ]
       scale: {
-        // Express supports up to 2 min-replicas and no custom scale rules.
         minReplicas: 1
         maxReplicas: 2
+      }
+    }
+  }
+}
+
+// ACA EasyAuth: Keycloak as a custom OpenID Connect provider. Anonymous requests are
+// allowed through (the app gates its own routes and serves a public homepage + Skill);
+// /login bounces the browser to /.auth/login/<providerName>. The client secret is read
+// from the app secret 'oidc-client-secret'.
+resource auth 'Microsoft.App/containerApps/authConfigs@2026-03-02-preview' = {
+  parent: app
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'AllowAnonymous'
+    }
+    identityProviders: {
+      customOpenIdConnectProviders: {
+        '${providerName}': {
+          registration: {
+            clientId: oidcClientId
+            clientCredential: {
+              clientSecretSettingName: 'oidc-client-secret'
+            }
+            openIdConnectConfiguration: {
+              wellKnownOpenIdConfiguration: '${oidcIssuer}/.well-known/openid-configuration'
+            }
+          }
+          login: {
+            nameClaimType: 'name'
+            scopes: [
+              'openid'
+              'profile'
+              'email'
+            ]
+          }
+        }
+      }
+    }
+    login: {
+      preserveUrlFragmentsForLogins: false
+      tokenStore: {
+        enabled: false
       }
     }
   }

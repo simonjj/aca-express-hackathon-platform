@@ -50,17 +50,30 @@ this only appears if you set a blank value manually.
 run the preprovision hook first (or `azd env set` the generated values), otherwise
 `oidcClientId` / secrets are unset.
 
-## Login (Keycloak / OIDC)
+## Login (EasyAuth / Keycloak)
 
-### `/login` returns 503 "OIDC is not configured"
-`OIDC_ISSUER` / `OIDC_CLIENT_ID` are unset — expected when running locally or before
-`postprovision` completes. After `azd up`, confirm the platform app has the `OIDC_*` env
-vars and that Keycloak is reachable at **KEYCLOAK_URI**.
+### `/login` returns 503 "Login unavailable"
+Neither EasyAuth nor app-level OIDC is configured. In Azure, confirm the platform app has
+`EASYAUTH_ENABLED=true` and an `authConfigs/current` resource; locally, set
+`EASYAUTH_ENABLED=false` + `OIDC_*` to use the app-level fallback.
 
 ### Login redirect loops or "invalid redirect_uri"
-Keycloak's client must allow `{PLATFORM_URI}/auth/callback`. `postprovision` sets this; if
-you changed the platform hostname, re-run `postprovision` or update the client's valid
+Keycloak's client must allow the EasyAuth callback
+`{PLATFORM_URI}/.auth/login/<provider>/callback` (and, for the OIDC fallback,
+`{PLATFORM_URI}/auth/callback`). `postprovision` registers both; if you changed the
+platform hostname or provider name, re-run `postprovision` or fix the client's valid
 redirect URIs in the Keycloak admin console.
+
+### `/.auth/login/...` returns 404 or "provider not found"
+The provider key in the `authConfigs` custom-OIDC block must match the name in the
+`/.auth/login/<name>` path. Both derive from `OIDC_PROVIDER_NAME` (default `keycloak`); if
+you override it, redeploy so the authConfig, the app's `OIDC_PROVIDER_NAME`, and the
+Keycloak redirect URI all agree.
+
+### EasyAuth can't reach the OIDC metadata
+The custom provider points at `{OIDC_ISSUER}/.well-known/openid-configuration`. That realm
+is created by `postprovision`, so the first login must happen after provisioning
+completes and Keycloak is healthy.
 
 ### Keycloak not ready yet
 Keycloak can take a minute to become healthy on first boot. Retry login, or check the
@@ -69,25 +82,32 @@ Keycloak container app logs (`az containerapp logs show`).
 ## Provisioning (deployment API)
 
 ### Dashboard shows "provisioning disabled"
-`AZURE_PROVISION_*` aren't set. Run `scripts/create-provisioner-sp.*`, then redeploy the
-platform (`azd deploy platform`) so the app picks up the new secrets.
+Neither a managed identity nor a service principal is configured. Redeploy with
+`useManagedIdentityProvisioning=true` (default), or set `AZURE_PROVISION_*` and
+`azd deploy platform` so the app picks up the credentials.
+
+### Role assignment fails on `azd up` (`AuthorizationFailed` on `roleAssignments/write`)
+Creating the provisioning managed identity assigns it **Contributor** on the RG, which
+needs you to be **Owner** or **User Access Administrator**. If you lack that, set
+`azd env set USE_MANAGED_IDENTITY_PROVISIONING false` and use a service principal instead.
 
 ### `AuthorizationFailed` when creating an app
-The service principal lacks **Contributor** on the resource group. Re-run the SP script or
-grant the role: `az role assignment create --assignee <clientId> --role Contributor
+The provisioning identity (managed identity or SP) lacks **Contributor** on the resource
+group. For an SP, re-run the script or grant it:
+`az role assignment create --assignee <clientId> --role Contributor
 --scope /subscriptions/<sub>/resourceGroups/<rg>`.
 
 ### Image pull fails (`UNAUTHORIZED`)
-Express pulls with **ACR admin credentials**, not MI. Ensure the registry has
-`adminUserEnabled: true` and that `ACR_USERNAME` / `ACR_PASSWORD` are set on the platform
-app. Public images (e.g. `mcr.microsoft.com/...`) need no credentials.
+Participant apps run on Express and pull with **ACR admin credentials**, not MI. Ensure the
+registry has `adminUserEnabled: true` and that `ACR_USERNAME` / `ACR_PASSWORD` are set on
+the platform app. Public images (e.g. `mcr.microsoft.com/...`) need no credentials.
 
 ### 401 from `/api/*`
 Missing/expired token. Re-open the dashboard to mint a fresh token, or send a valid session
 cookie. Tokens are JWTs signed with `PLATFORM_API_SECRET` and expire after 30 days.
 
-## "Why not EasyAuth?"
-The reference EasyAuth sidecar depends on managed identity, which Express doesn't provide.
-We therefore implement OIDC **in the app** with `openid-client`. If you move the control
-plane to a standard environment you can switch back to EasyAuth or Entra ID — see
+## Note on EasyAuth vs Express
+Login uses **ACA EasyAuth** (custom OIDC → Keycloak) on the **standard** environment that
+hosts the control plane. EasyAuth isn't available on Express, but the platform app doesn't
+run there — only participant apps do. To switch the IdP to Entra ID, see
 [keycloak-to-entraid.md](keycloak-to-entraid.md).

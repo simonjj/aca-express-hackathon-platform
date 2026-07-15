@@ -47,18 +47,22 @@ apps there; participant URLs use the Express env's default domain.
 | Express ACA environment | `infra/modules/express-environment.bicep` | `environmentMode: 'Express'` at api `2026-03-02-preview`, no `appLogsConfiguration`. Participant-app target. |
 | Container registry | `infra/modules/registry.bicep` | `adminUserEnabled: true` — Express can't pull with MI. |
 | Keycloak | `infra/modules/keycloak.bicep` | Self-hosted OIDC provider on the standard env, public ingress. |
-| Platform app | `infra/modules/platform.bicep` | Runs on the standard env; external ingress, SP + OIDC + secret env, min 1 / max 2 replicas. |
+| Platform app | `infra/modules/platform.bicep` | Runs on the standard env; external ingress, EasyAuth + managed identity + secret env, min 1 / max 2 replicas. |
 
 ## Request / data flow
 
 1. **Browse** → `/` renders `content/homepage.md` (or `HOMEPAGE_MARKDOWN`) in the HUD theme.
-2. **Login** → `/login` starts OIDC Authorization Code + PKCE (`lib/oidc.js`, `openid-client`
-   v5). `/auth/callback` establishes a signed `cookie-session`.
+2. **Login** → `/login` redirects to the ACA **EasyAuth** endpoint
+   `/.auth/login/<provider>`; the sidecar runs the OIDC code flow against Keycloak and,
+   on return, injects the `X-MS-CLIENT-PRINCIPAL*` headers. `lib/auth.js` reads them into
+   the request user. (A legacy app-level `openid-client` flow in `lib/oidc.js` remains as
+   a fallback when EasyAuth is disabled.)
 3. **Dashboard** → `/dashboard` lists the user's apps and shows a personal **API token**
    (JWT signed with `PLATFORM_API_SECRET`, `lib/tokens.js`).
 4. **Deploy** → `POST /api/apps` → `lib/aca.js` calls `@azure/arm-appcontainers`
-   `beginCreateOrUpdateAndWait` with a `ClientSecretCredential`. Each deploy uses a fresh
-   `revisionSuffix` = a snapshot.
+   `beginCreateOrUpdateAndWait` with a `ManagedIdentityCredential` (or
+   `ClientSecretCredential` when an SP is configured). Express rejects a custom
+   `revisionSuffix`, so ACA auto-names each revision — every deploy is still a snapshot.
 5. **List / status** → `GET /api/apps` queries ARM and filters by the `hackathon-owner` tag.
 6. **Rollback** → `POST /api/apps/:name/rollback` reads the target revision's `template`
    and re-applies it as a new active revision.
@@ -92,39 +96,61 @@ see all).
 
 ## Managed identity vs service principal
 
-**Why a Service Principal (not managed identity)?** The platform app now runs on a
-**standard** environment, so managed identity *would* work. The template ships with a
-**Service Principal client secret** because it works regardless of host, needs no UAMI
-wiring, and keeps ARM auth + ACR pulls uniform. The platform authenticates to ARM with the
-SP and pulls images with **ACR admin credentials**.
+The platform provisions participant apps as its **own** identity, tagging each app with
+`hackathon-owner` for per-user isolation. It authenticates to ARM with a **user-assigned
+managed identity** by default, and can fall back to a **service principal**.
 
-> Note: participant apps themselves land on **Express**, which does **not** support managed
-> identity (`ExpressEnvironmentFeatureNotSupported`) — but that doesn't affect how the
-> *control plane* authenticates.
+This is possible because the control plane runs on a **standard** ACA environment — an
+Express app could not carry a managed identity. Participant apps land on Express and don't
+need an identity (they're pulled from ACR with admin credentials).
 
-`lib/aca.js`:
+### Managed identity (default)
+
+`infra/modules/provisioner-identity.bicep` creates a **user-assigned identity** and grants
+it **Contributor** on the resource group. `platform.bicep` attaches it to the app and sets
+`AZURE_CLIENT_ID` (+ `AZURE_USE_MANAGED_IDENTITY=true`), so `lib/aca.js` uses:
 
 ```js
-const cred = new ClientSecretCredential(tenantId, clientId, clientSecret);
+const cred = new ManagedIdentityCredential({ clientId: process.env.AZURE_CLIENT_ID });
 const client = new ContainerAppsAPIClient(cred, subscriptionId);
 ```
 
-The SP is created by `scripts/create-provisioner-sp.*` with **Contributor** on the target
-resource group and stored as `AZURE_PROVISION_CLIENT_ID` / `AZURE_PROVISION_CLIENT_SECRET`
-in the azd environment (surfaced to the app as secrets).
+> The deployer needs rights to create the role assignment (Owner / User Access
+> Administrator on the RG). If that's not available, set
+> `useManagedIdentityProvisioning=false` and use a service principal instead.
 
-**To switch the control plane to managed identity** (it runs on a standard env, so this is
-easy):
+### Service principal (override)
 
-1. Give the platform app a **user-assigned identity** with `Contributor` on the RG.
-2. Swap the credential:
-   ```js
-   const cred = new DefaultAzureCredential();   // uses the app's UAMI
-   ```
-3. Enable ACR pull via the same UAMI (`az containerapp registry set --identity`) and drop
-   the ACR admin username/password.
+If `AZURE_PROVISION_CLIENT_ID` / `AZURE_PROVISION_CLIENT_SECRET` (+ `AZURE_TENANT_ID`) are
+set, they take precedence and `lib/aca.js` uses a `ClientSecretCredential`. The SP is
+created by `scripts/create-provisioner-sp.*` with **Contributor** on the RG. Useful in
+tenants where you can't create a role assignment but can supply an existing SP.
 
-Everything else (API, snapshots, tags, UI) is identical.
+### Why not true on-behalf-of?
+
+Participants authenticate via **Keycloak**, not Entra ID, so their tokens can't be
+exchanged for ARM tokens. The platform therefore provisions as its own identity and
+enforces per-user isolation with tags + the `h<hash>-<name>` naming scheme, rather than
+impersonating each user against ARM.
+
+## Login (ACA EasyAuth → Keycloak)
+
+Login is handled by the ACA **EasyAuth** feature configured as a **custom OpenID Connect
+provider** pointing at Keycloak (`Microsoft.App/containerApps/authConfigs`, see
+`platform.bicep`):
+
+- `globalValidation.unauthenticatedClientAction = 'AllowAnonymous'` — the homepage, Skill,
+  health checks, and API-token calls stay public; the app gates its own protected routes.
+- `/login` → `302 /.auth/login/<provider>?post_login_redirect_uri=/dashboard`. The sidecar
+  runs the OIDC code flow and, on success, injects `X-MS-CLIENT-PRINCIPAL*` headers.
+- `lib/auth.js#getEasyAuthUser` base64-decodes `X-MS-CLIENT-PRINCIPAL`, maps the
+  `preferred_username` / `email` / `name` claims to `{ id, name, email }`.
+- `/logout` → `/.auth/logout`.
+
+The Keycloak client's allowed redirect URI is
+`https://<platform-fqdn>/.auth/login/<provider>/callback`, registered by the
+`postprovision` hook. Set `EASYAUTH_ENABLED=false` to fall back to the app-level
+`openid-client` flow (`lib/oidc.js`) for local development.
 
 ## Notable Express constraints (design drivers)
 
