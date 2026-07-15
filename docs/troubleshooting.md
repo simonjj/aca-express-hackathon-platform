@@ -3,22 +3,47 @@
 ## Deployment (azd / Bicep)
 
 ### `ExpressEnvironmentFeatureNotSupported`
-You (or a customization) tried to use a feature Express doesn't support — managed identity,
-internal ingress, KEDA custom scale rules, Dapr, jobs, or VNet. Remove the feature or host
-that piece on a standard ACA environment. See
-[architecture.md](architecture.md#notable-express-constraints-design-drivers).
+Something tried to use a feature Express doesn't support — managed identity, internal
+ingress, KEDA custom scale rules, Dapr, jobs, VNet, or a **`revisionSuffix`** on the app
+template. Remove the feature or host that piece on a **standard** ACA environment.
+
+Note that **`azd deploy` always sends a `revisionSuffix`**, so azd-deployed apps (the
+platform + Keycloak) must live on a standard env — which is exactly why this template uses
+two environments. Only participant apps run on Express. See
+[architecture.md](architecture.md#why-two-environments).
 
 ### Region / quota errors on `azd up`
 ACA Express preview runs only in **westcentralus** and **eastasia**. Choose one of those
 locations. If you hit quota, request more or try the other region.
 
-### `BCP037: environmentMode is not an allowed property`
-Expected and harmless. `environmentMode` is newer than the Bicep type definitions, so we
-pass it with `#disable-next-line BCP037`. ARM still honors it and creates an Express env.
+### `ManagedEnvironmentInvalidSchema` on the Express environment
+The Express env only deploys via Bicep/ARM at api-version **`2026-03-02-preview`** with
+`properties.environmentMode: 'Express'`. Older versions (e.g. `2024-10-02-preview`) reject
+the schema. `infra/modules/express-environment.bicep` already pins the correct version.
+
+### `App Logs destination 'none' is not supported`
+Express rejects a literal `appLogsConfiguration.destination: 'none'`. The fix is to **omit
+the `appLogsConfiguration` block entirely** on the Express env (app logs are simply
+disabled there). The standard env keeps `log-analytics`.
+
+### `BCP081` warnings for `2026-03-02-preview`
+Benign — the Bicep type index doesn't yet include this preview api-version, so resource
+bodies aren't type-checked. Deployment still succeeds.
 
 ### `BCP318` warning on `fetch-container-image.bicep`
 Benign — a possibly-null reference guarded by a `??` fallback. Matches the upstream
 reference template.
+
+### `ServiceManagementReference field is required` creating the SP
+In some tenants (e.g. `microsoft.com`), `az ad sp create-for-rbac` requires a service-tree
+reference. Supply an existing SP via `azd env set AZURE_PROVISION_CLIENT_ID/SECRET/...`, or
+deploy with **provisioning disabled** (the default when no SP is set) and wire it later.
+See <https://aka.ms/service-management-reference-error>.
+
+### `ContainerAppSecretInvalid` (empty secret)
+An ACA secret with an empty value is rejected. The platform module only defines the
+`provision-client-secret` secret when an SP secret is actually provided (`hasProvision`), so
+this only appears if you set a blank value manually.
 
 ### Required parameters missing on provision
 `preprovision` must run before params resolve. If you invoke provisioning outside `azd up`,

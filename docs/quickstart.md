@@ -16,10 +16,9 @@ azd env new my-hackathon
 
 ## 2. Create the provisioning service principal
 
-The platform provisions participant apps with a **service principal** (Express has no
-managed identity). This script creates the SP, grants it **Contributor** on the resource
-group azd will use, and writes `AZURE_PROVISION_CLIENT_ID` / `AZURE_PROVISION_CLIENT_SECRET`
-into the azd env.
+The platform provisions participant apps with a **service principal**. This script creates
+the SP, grants it **Contributor** on the resource group azd will use, and writes
+`AZURE_PROVISION_CLIENT_ID` / `AZURE_PROVISION_CLIENT_SECRET` into the azd env.
 
 ```bash
 pwsh ./scripts/create-provisioner-sp.ps1        # Windows / pwsh
@@ -27,8 +26,11 @@ pwsh ./scripts/create-provisioner-sp.ps1        # Windows / pwsh
 sh   ./scripts/create-provisioner-sp.sh         # bash
 ```
 
-> You can skip this step to deploy the UI only; the dashboard will show a
-> "provisioning disabled" banner until the SP is configured.
+> **Provisioning is disabled by default.** If you skip this step, the platform still
+> deploys and you can log in and browse — the dashboard shows a "provisioning disabled"
+> banner until an SP is configured (`azd env set AZURE_PROVISION_*`, then `azd provision`).
+> In some tenants `az ad sp create-for-rbac` needs a service-tree reference; see
+> [troubleshooting](troubleshooting.md#servicemanagementreference-field-is-required-creating-the-sp).
 
 ## 3. Deploy
 

@@ -14,14 +14,14 @@ param adminPassword string
 param image string = 'quay.io/keycloak/keycloak:26.0'
 param targetPort int = 8080
 
-resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-10-02-preview' existing = {
+resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2026-03-02-preview' existing = {
   name: containerAppsEnvironmentName
 }
 
 // The Keycloak FQDN is deterministic once the environment exists: <name>.<defaultDomain>.
 var baseUrl = 'https://${name}.${environmentDefaultDomain}'
 
-resource keycloak 'Microsoft.App/containerApps@2024-10-02-preview' = {
+resource keycloak 'Microsoft.App/containerApps@2026-03-02-preview' = {
   name: name
   location: location
   tags: union(tags, { 'azd-service-name': 'keycloak' })

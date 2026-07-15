@@ -94,14 +94,24 @@ module registry './modules/registry.bicep' = {
   }
 }
 
-module environment './modules/environment.bicep' = {
-  name: 'environment'
+module standardEnv './modules/environment-standard.bicep' = {
+  name: 'environment-standard'
   scope: rg
   params: {
     name: '${abbrs.appManagedEnvironments}${resourceToken}'
     location: location
     tags: tags
     logAnalyticsWorkspaceName: '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
+  }
+}
+
+module expressEnv './modules/express-environment.bicep' = {
+  name: 'environment-express'
+  scope: rg
+  params: {
+    name: '${abbrs.appManagedEnvironments}express-${resourceToken}'
+    location: location
+    tags: tags
   }
 }
 
@@ -112,8 +122,8 @@ module keycloak './modules/keycloak.bicep' = {
     name: keycloakName
     location: location
     tags: tags
-    containerAppsEnvironmentName: environment.outputs.name
-    environmentDefaultDomain: environment.outputs.domain
+    containerAppsEnvironmentName: standardEnv.outputs.name
+    environmentDefaultDomain: standardEnv.outputs.domain
     adminUsername: keycloakAdminUsername
     adminPassword: keycloakAdminPassword
   }
@@ -130,9 +140,11 @@ module platform './modules/platform.bicep' = {
     tags: tags
     serviceName: 'platform'
     containerRegistryName: registry.outputs.name
-    containerAppsEnvironmentName: environment.outputs.name
-    managedEnvironmentId: environment.outputs.id
-    environmentDefaultDomain: environment.outputs.domain
+    containerAppsEnvironmentName: standardEnv.outputs.name
+    environmentDefaultDomain: standardEnv.outputs.domain
+    targetEnvironmentId: expressEnv.outputs.id
+    targetEnvironmentName: expressEnv.outputs.name
+    targetEnvironmentDomain: expressEnv.outputs.domain
     exists: platformExists
     defaultReplicaSize: defaultReplicaSize
     adminUsers: adminUsers
@@ -154,7 +166,8 @@ output AZURE_RESOURCE_GROUP string = rg.name
 output AZURE_LOCATION string = location
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = registry.outputs.loginServer
 output AZURE_CONTAINER_REGISTRY_NAME string = registry.outputs.name
-output AZURE_CONTAINER_ENVIRONMENT_NAME string = environment.outputs.name
+output AZURE_CONTAINER_ENVIRONMENT_NAME string = standardEnv.outputs.name
+output ACA_EXPRESS_ENVIRONMENT_NAME string = expressEnv.outputs.name
 
 output PLATFORM_URI string = platform.outputs.uri
 output PLATFORM_REDIRECT_URI string = redirectUri

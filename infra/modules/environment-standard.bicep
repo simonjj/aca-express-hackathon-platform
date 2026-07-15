@@ -1,6 +1,9 @@
-// Azure Container Apps (Express/Consumption) environment + Log Analytics workspace.
-// This single environment hosts the hackathon platform, Keycloak, and every
-// participant-deployed application.
+// Standard Azure Container Apps environment (regular ACA Bicep) that hosts the two
+// control-plane apps: Keycloak and the hackathon platform itself. These run here (not on
+// Express) so that: (a) `azd deploy` works normally — Express rejects the revision
+// suffix azd uses, and (b) they avoid the Express first-boot provisioning race. The
+// participant apps the platform creates target the separate **Express** environment
+// (see express-environment.bicep).
 param name string
 param location string = resourceGroup().location
 param tags object = {}
@@ -18,15 +21,11 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   }
 }
 
-resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-10-02-preview' = {
+resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2026-03-02-preview' = {
   name: name
   location: location
   tags: tags
   properties: {
-    // Express mode: opinionated scale-to-zero tier. Accepted by ARM/az CLI but not yet
-    // in the Bicep type schema (emits BCP037), so we suppress the linter warning.
-    #disable-next-line BCP037
-    environmentMode: 'Express'
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
@@ -40,5 +39,3 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-10-02-
 output name string = containerAppsEnvironment.name
 output id string = containerAppsEnvironment.id
 output domain string = containerAppsEnvironment.properties.defaultDomain
-output logAnalyticsWorkspaceName string = logAnalytics.name
-output logAnalyticsCustomerId string = logAnalytics.properties.customerId
