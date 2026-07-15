@@ -65,15 +65,25 @@ async function completeLogin(req) {
   };
   req.session.oidc = undefined;
   req.session.user = user;
+  // Keep the raw id_token so it can be sent as id_token_hint on logout (required by
+  // Keycloak 18+ RP-initiated logout when a post_logout_redirect_uri is supplied).
+  req.session.idToken = tokenSet.id_token;
   return user;
 }
 
-// Build the end-session (logout) URL if the provider supports it.
-async function endSessionUrl() {
+// Build the end-session (logout) URL if the provider supports it. Keycloak rejects the
+// end_session_endpoint with "Missing parameters: id_token_hint" unless an id_token_hint
+// (or client_id) accompanies the post_logout_redirect_uri, so pass both when available.
+async function endSessionUrl(idTokenHint) {
   try {
     const client = await getClient();
     if (client.issuer.metadata.end_session_endpoint) {
-      return client.endSessionUrl({ post_logout_redirect_uri: config.baseUrl });
+      const params = {
+        post_logout_redirect_uri: config.baseUrl,
+        client_id: config.oidc.clientId,
+      };
+      if (idTokenHint) params.id_token_hint = idTokenHint;
+      return client.endSessionUrl(params);
     }
   } catch (_) {
     /* fall through */

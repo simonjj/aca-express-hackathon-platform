@@ -55,6 +55,22 @@ app.get('/', (req, res) => {
 });
 
 // --- Auth ------------------------------------------------------------------
+// EasyAuth stores its session in the `AppServiceAuthSession` cookie (chunked into
+// `AppServiceAuthSession0..n` when large). Expire all of them (host-only, path=/) so the
+// browser drops the EasyAuth session on logout without contacting Keycloak.
+function clearEasyAuthSession(res) {
+  const names = ['AppServiceAuthSession'];
+  for (let i = 0; i < 5; i += 1) names.push(`AppServiceAuthSession${i}`);
+  const secure = config.baseUrl.startsWith('https://');
+  const cookies = names.map(
+    (n) =>
+      `${n}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; SameSite=Lax${
+        secure ? '; Secure' : ''
+      }`
+  );
+  res.append('Set-Cookie', cookies);
+}
+
 // EasyAuth mode: the ACA sidecar owns the OIDC flow; /login and /logout just bounce to
 // the platform's /.auth endpoints. OIDC mode: the app runs the Authorization Code + PKCE
 // flow itself (lib/oidc.js). Either way the browser lands back on /dashboard.
@@ -89,13 +105,21 @@ app.get('/auth/callback', async (req, res) => {
 });
 
 app.get('/logout', async (req, res) => {
+  const idTokenHint = req.session && req.session.idToken;
   req.session = null;
   if (config.easyAuthEnabled) {
-    return res.redirect('/.auth/logout?post_logout_redirect_uri=%2F');
+    // Local logout: clear the EasyAuth session cookie ourselves and return to the app.
+    // We deliberately do NOT redirect to /.auth/logout: for a custom OIDC provider it
+    // performs a federated sign-out to Keycloak's end_session_endpoint without an
+    // id_token_hint, which Keycloak 18+ rejects ("Missing parameters: id_token_hint").
+    // EasyAuth remains the frontend; Keycloak stays a backend-only IdP. The user's
+    // Keycloak SSO cookie is left intact, so a subsequent login is silent.
+    clearEasyAuthSession(res);
+    return res.redirect('/');
   }
   let url = config.baseUrl;
   try {
-    url = await oidc.endSessionUrl();
+    url = await oidc.endSessionUrl(idTokenHint);
   } catch (_) {
     /* ignore */
   }
