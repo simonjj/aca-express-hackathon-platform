@@ -11,6 +11,17 @@ The control plane (the platform app + Keycloak) runs on a **standard** ACA envir
 **participant apps** are provisioned into a dedicated **Express** environment. See
 [why two environments](#why-two-environments) below.
 
+## Screenshots
+
+**Hackathon homepage** — the public mission-briefing landing page participants see:
+
+![Hackathon homepage](docs/images/homepage.png)
+
+**Participant management UI** — where each operator grabs their API token and deploys,
+lists, versions and rolls back their apps:
+
+![Participant management UI](docs/images/dashboard.png)
+
 ```
                          ┌───────────────────────────────────────────────┐
    participant browser ──►  Hackathon Platform  (standard ACA app)        │
