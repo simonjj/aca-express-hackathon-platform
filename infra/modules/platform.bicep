@@ -168,14 +168,14 @@ resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
           name: 'platform'
           env: env
           resources: {
-            cpu: json('1.0')
-            memory: '2.0Gi'
+            cpu: json('2.0')
+            memory: '4.0Gi'
           }
         }
       ]
       scale: {
         minReplicas: 1
-        maxReplicas: 2
+        maxReplicas: 3
       }
     }
   }
