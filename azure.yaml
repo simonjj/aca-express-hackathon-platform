@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: aca-express-hackathon-platform
+metadata:
+  template: aca-express-hackathon-platform@1.0.0
+
+# A single ACA Express container app that is the hackathon platform (UI + API).
+# Participant apps are created at runtime by the platform via ARM, not by azd.
+services:
+  platform:
+    project: ./src/platform
+    host: containerapp
+    language: js
+    docker:
+      path: Dockerfile
+
+# Lifecycle hooks:
+#  - preprovision  : generate the OIDC client id/secret, Keycloak admin password, and
+#                    the platform API + session secrets (no Entra needed).
+#  - postprovision : configure the Keycloak realm/client/test-user with the real
+#                    app-level callback URI and print the URL to test.
+hooks:
+  preprovision:
+    posix:
+      shell: sh
+      run: ./hooks/preprovision.sh
+      interactive: false
+    windows:
+      shell: pwsh
+      run: ./hooks/preprovision.ps1
+      interactive: false
+  postprovision:
+    posix:
+      shell: sh
+      run: ./hooks/postprovision.sh
+      interactive: false
+    windows:
+      shell: pwsh
+      run: ./hooks/postprovision.ps1
+      interactive: false

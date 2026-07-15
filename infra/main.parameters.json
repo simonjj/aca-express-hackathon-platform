@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "resourceGroupName": {
+      "value": "${AZURE_RESOURCE_GROUP=}"
+    },
+    "defaultReplicaSize": {
+      "value": "${DEFAULT_REPLICA_SIZE=1cpu2ram}"
+    },
+    "adminUsers": {
+      "value": "${ADMIN_USERS=}"
+    },
+    "providerName": {
+      "value": "${OIDC_PROVIDER_NAME=keycloak}"
+    },
+    "realmName": {
+      "value": "${OIDC_REALM=hackathon}"
+    },
+    "oidcClientId": {
+      "value": "${OIDC_CLIENT_ID}"
+    },
+    "oidcClientSecret": {
+      "value": "${OIDC_CLIENT_SECRET}"
+    },
+    "keycloakAdminUsername": {
+      "value": "${KEYCLOAK_ADMIN_USERNAME=admin}"
+    },
+    "keycloakAdminPassword": {
+      "value": "${KEYCLOAK_ADMIN_PASSWORD}"
+    },
+    "provisionTenantId": {
+      "value": "${AZURE_PROVISION_TENANT_ID=}"
+    },
+    "provisionClientId": {
+      "value": "${AZURE_PROVISION_CLIENT_ID=}"
+    },
+    "provisionClientSecret": {
+      "value": "${AZURE_PROVISION_CLIENT_SECRET=}"
+    },
+    "platformApiSecret": {
+      "value": "${PLATFORM_API_SECRET}"
+    },
+    "sessionSecret": {
+      "value": "${SESSION_SECRET}"
+    },
+    "platformExists": {
+      "value": "${SERVICE_PLATFORM_RESOURCE_EXISTS=false}"
+    }
+  }
+}
